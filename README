@@ -1,0 +1,47 @@
+[sw version 0.1] Host (Linux) +  HiFix with XAF using XTSC
+============================================================
+prerequisite:
+
+1. Check /usr/bin/gcc version and if it is greater than ~/XtensaTools/Tools/bin/gcc, use /usr/bin/gcc by seting the path like below. 
+
+    $ set path = ( /usr/bin $path )
+
+2. Install libfdt-dev on your local machine only if /usr/bin/gcc is used.
+
+    $ sudo apt-get install libfdt-dev
+
+
+
+Build Steps below :
+
+1. Set up environment variables for Xtensa Tools:
+    
+    E.g below : 
+    $ set path = ($path ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/bin )
+    $ set path = ( ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/bin $path )
+    $ setenv XTENSA_SYSTEM ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/config
+    $ setenv XTENSA_CORE AE_HiFi4_LE5
+    $ set path = ( ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/Tools/bin $path )
+    $ set path = ( /usr/bin $path )  ( only set this, if /usr/bin/gcc version is gretaer than ~/XtensaTools/Tools/bin/gcc )
+
+2. $ cd build
+   $ make clean
+      
+3. $ make xrp_setup
+        This copies over the XRP host source files from XtensaTools
+        
+4. $ make build 
+        This generates the XTSC model and the MP LSPs
+        
+5. $ make stmp-xrp 
+        This generates the XRP libraries for the host       
+        
+6. $ cd ../dsp/xaf/build/        
+   $ make clean all        
+        Build XAF library with pcm gain component.
+   $ cd ../../../build/   
+        
+7. $ make run
+        Builds the binaries for the host and the single core DSP and runs them.
+
+

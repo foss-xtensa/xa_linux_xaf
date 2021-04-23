@@ -1,0 +1,53 @@
+---
+SubSystemName: SubSystem
+
+Processors:
+- Name: DSP0
+  Config: AE_HiFi4_LE5
+  Master: 1
+  PifWidth: 8b
+  ProcId: 0
+  StaticVectorSel: 0
+  DataRam0:
+    LocalAddr: 0x70000000
+    NumBanks: 4
+    NumSubBanks: 1
+    Size: 128Mb
+  DataRamFetchWidth: 8b
+  Dcache:
+    LineSize: 64
+  InstRam0:
+    LocalAddr: 0x58000000
+    Size: 128Mb
+  InstRamFetchWidth: 8b
+  LocalMMIO:
+    GlobalAddr: 0x80200000
+    InterruptRegister:
+      GlobalAddr: 0x80200000
+      InterruptMap:
+      - BInterrupt: 10
+        BitOffset: 0
+        ProcInterrupt: 10
+        xrpNotify: 1
+    Size: 4b
+
+SystemRAM:
+  GlobalAddr: 0x60000000
+  Size: 64Mb
+
+SystemROM:
+  GlobalAddr: 0x50000000
+  Size: 16384Kb
+
+DeviceMemories:
+  - {Name: SharedRAM,
+     Size: 256Mb,
+     GlobalAddr: 0x30000000,
+     HostShared: true,
+     HostName: SharedRAM_L
+    }
+
+SubSystemSoftware:
+  XRPDeviceTreeSpec: {
+     XRPSharedMem: SharedRAM
+  }
