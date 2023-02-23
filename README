@@ -1,47 +1,39 @@
-[sw version 0.1] Host (Linux) +  HiFix with XAF using XTSC
-============================================================
-prerequisite:
+======================================================================
+Xtensa Audio Framework (XAF) - Host (Linux) +  HiFi with Hostless XAF
+======================================================================
 
-1. Check /usr/bin/gcc version and if it is greater than ~/XtensaTools/Tools/bin/gcc, use /usr/bin/gcc by seting the path like below. 
+======================================================================
+Revision History
+======================================================================
 
-    $ set path = ( /usr/bin $path )
+Version 1.0 : Feb 23, 2023
 
-2. Install libfdt-dev on your local machine only if /usr/bin/gcc is used.
++ Built and tested with RI.6 tools
 
-    $ sudo apt-get install libfdt-dev
+NOTES:
+1. The RTOS supported and tested is XOS 
+2. Support for 1 input and 1 output stream for a generic pipe
 
+======================================================================
+Version 0.2 : June 21, 2022
 
++ Built and tested with RI.6 tools
 
-Build Steps below :
++ xaf-hostless version is upgraded to v2.10
 
-1. Set up environment variables for Xtensa Tools:
-    
-    E.g below : 
-    $ set path = ($path ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/bin )
-    $ set path = ( ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/bin $path )
-    $ setenv XTENSA_SYSTEM ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/config
-    $ setenv XTENSA_CORE AE_HiFi4_LE5
-    $ set path = ( ~/xtensa/XtDevTools/install/tools/RI-2019.2-linux/XtensaTools/Tools/bin $path )
-    $ set path = ( /usr/bin $path )  ( only set this, if /usr/bin/gcc version is gretaer than ~/XtensaTools/Tools/bin/gcc )
++ Added generic command support to create, connect and execute a 
+data-pipe with 1 input and 1 output stream
 
-2. $ cd build
-   $ make clean
-      
-3. $ make xrp_setup
-        This copies over the XRP host source files from XtensaTools
-        
-4. $ make build 
-        This generates the XTSC model and the MP LSPs
-        
-5. $ make stmp-xrp 
-        This generates the XRP libraries for the host       
-        
-6. $ cd ../dsp/xaf/build/        
-   $ make clean all        
-        Build XAF library with pcm gain component.
-   $ cd ../../../build/   
-        
-7. $ make run
-        Builds the binaries for the host and the single core DSP and runs them.
+NOTES:
+1. The RTOS supported and tested is XOS 
+2. Support for 1 input and 1 output stream for a generic pipe
 
+======================================================================
 
+Version 0.1: February, 2021
+
++ Built and tested with RI.2 tools
+
++ Initial revision
+
++ xaf-hostless version used is v2.3

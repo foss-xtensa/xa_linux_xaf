@@ -1,26 +1,3 @@
-	/*
-	* Copyright (c) 2015-2020 Cadence Design Systems Inc.
-	*
-	* Permission is hereby granted, free of charge, to any person obtaining
-	* a copy of this software and associated documentation files (the
-	* "Software"), to deal in the Software without restriction, including
-	* without limitation the rights to use, copy, modify, merge, publish,
-	* distribute, sublicense, and/or sell copies of the Software, and to
-	* permit persons to whom the Software is furnished to do so, subject to
-	* the following conditions:
-	*
-	* The above copyright notice and this permission notice shall be included
-	* in all copies or substantial portions of the Software.
-	*
-	* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-	* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-	* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-	* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-	* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-	* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-	* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-	*/
-
 #include <stdio.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -40,6 +17,25 @@
 #include "hihat_pcm.h"
 #include "string.h"
 #include "hihat_ref_pcm_gain.h"
+
+/*******************************************************************************
+ * Definitions
+ ******************************************************************************/
+#define DSP_NUM_COMP_IN_GRAPH_MAX   16
+
+/******************************************************************************
+global variables
+******************************************************************************/
+typedef struct _file_manager_s{
+    FILE *fpIn;
+    FILE *fpOut;
+    uint32_t fid;
+    uint32_t cid;
+}file_manager_t;
+
+file_manager_t gfile_manager[DSP_NUM_COMP_IN_GRAPH_MAX];
+uint32_t gfile_manager_index=0;
+static bool file_playing[DSP_NUM_COMP_IN_GRAPH_MAX];
 
 #define CHECK_ERROR(api) \
     do { \
@@ -66,6 +62,7 @@ void commandMenu(void)
     fprintf(stdout, "                                         :  By default if no path is provided, it list files from ../test/test_inp/ directory \n");
     fprintf(stdout, "                    file  <audio_file>   :  Decode the audio_file and write into file output \n");
     fprintf(stdout, "                    file  stop           :  Stop file decoding  \n");  
+    fprintf(stdout, "pipe \"create,<rate,ch,pcm_width,cid,comp-type-enum,ninbuf,noutbuf,infile-path,outfile-path>;create <>,<>,...<>;connect,source-cid,source-port,dest-cid,dest-port,numConnetBuf>;connect <>,<>,..<>;\"\n");
     fprintf(stdout, ">>");  
     fflush(stdout);
 }
@@ -95,6 +92,24 @@ void setup_filetype(const char *dot,formatCommand *format_command)
     {
         format_command->file_type = DSP_COMPONENT_AAC;
         printf("File format: AAC\n>>");
+        fflush(stdout);
+    }
+    else if(!(dot && strncmp(dot + 1, "pcm", 3)))
+    {
+        format_command->file_type = DSP_COMPONENT_PCM_GAIN;
+        printf("File format: PCM\n>>");
+        fflush(stdout);
+    }
+    else if(!(dot && strncmp(dot + 1, "bit", 3)))
+    {
+        format_command->file_type = DSP_COMPONENT_OPUS_DEC;
+        printf("File format: OPUS_DEC\n>>");
+        fflush(stdout);
+    }
+    else if(!(dot && strncmp(dot + 1, "out", 3)))
+    {
+        format_command->file_type = DSP_COMPONENT_OPUS_ENC;
+        printf("File format: OPUS_ENC\n>>");
         fflush(stdout);
     }
     else if(!(dot && strncmp(dot + 1, "ogg", 3)))
@@ -141,6 +156,13 @@ int shellParseLine(struct hostArgs *cmd_args, formatCommand *format_command)
         format_command->argcount = cmd_args->argc;
         format_command->cmd = HOST_CMD_EXIT;
     }
+    else if((strcmp(cmd_args->argv[COMMAND_INDEX], "pipe") == 0) &&
+            (cmd_args->argc > 2) && (cmd_args->argc <= 4))
+    {
+        format_command->argcount = cmd_args->argc;
+        format_command->cmd = HOST_CMD_CREATE;
+        strcpy(format_command->arg1, cmd_args->argv[2]);
+    }
     else if((strcmp(cmd_args->argv[COMMAND_INDEX], "file") == 0) &&
             (cmd_args->argc > 2) && (cmd_args->argc <= 4))
     {
@@ -186,7 +208,11 @@ int shellParseLine(struct hostArgs *cmd_args, formatCommand *format_command)
                         dot = strrchr(dir->d_name, '.');
                         if ((dot && strncmp(dot + 1, "mp3", 3) == 0) ||
                             (dot && strncmp(dot + 1, "aac", 3) == 0) ||
-                            (dot && strncmp(dot + 1, "ogg", 3) == 0))
+                            (dot && strncmp(dot + 1, "ogg", 3) == 0) ||
+                            (dot && strncmp(dot + 1, "pcm", 3) == 0) ||
+                            (dot && strncmp(dot + 1, "bit", 3) == 0) ||
+                            (dot && strncmp(dot + 1, "out", 3) == 0)    /* PCM file for opus encoder */
+                        )
                         {
                             count++;
                             printf("File %d:: %s\n",count,dir->d_name);
@@ -215,7 +241,7 @@ int shellParseLine(struct hostArgs *cmd_args, formatCommand *format_command)
         {
             format_command->argcount = cmd_args->argc;
             format_command->cmd = HOST_CMD_STOP;
-            if(!file_playing)
+            if (!file_playing[0])
             {
                 printf("No file is playing to STOP.\n");
                 return 1;
@@ -228,7 +254,11 @@ int shellParseLine(struct hostArgs *cmd_args, formatCommand *format_command)
                 dot = strrchr(cmd_args->argv[2], '.');
                 if ((dot && strncmp(dot + 1, "mp3", 3) != 0) &&
                     (dot && strncmp(dot + 1, "aac", 3) != 0) &&
-                    (dot && strncmp(dot + 1, "ogg", 3) != 0))
+                    (dot && strncmp(dot + 1, "ogg", 3) != 0) &&
+                    (dot && strncmp(dot + 1, "pcm", 3) != 0) &&
+                    (dot && strncmp(dot + 1, "bit", 3) != 0) &&
+                    (dot && strncmp(dot + 1, "out", 3) != 0)
+                )
                 {
                     printf("Wrong user input file :: %s :: Type --help-- for more info!!\n",cmd_args->argv[2]);
                     return 1;
@@ -242,14 +272,18 @@ int shellParseLine(struct hostArgs *cmd_args, formatCommand *format_command)
                 {
                     setup_filetype(dot,format_command);
                 }
-                strcpy(format_command->file_path,cmd_args->argv[2]);//Copy hardcoded path to file_path
+                strcpy(format_command->input_file_path,cmd_args->argv[2]);//Copy hardcoded path to file_path
             }
             else
             {
                 dot = strrchr(cmd_args->argv[2], '.');
                 if ((dot && strncmp(dot + 1, "mp3", 3) != 0) &&
                     (dot && strncmp(dot + 1, "aac", 3) != 0) &&
-                    (dot && strncmp(dot + 1, "ogg", 3) != 0))
+                    (dot && strncmp(dot + 1, "ogg", 3) != 0) &&
+                    (dot && strncmp(dot + 1, "pcm", 3) != 0) &&
+                    (dot && strncmp(dot + 1, "bit", 3) != 0) &&
+                    (dot && strncmp(dot + 1, "out", 3) != 0)
+                )
                 {
                     printf("Wrong user input file :: %s :: Type --help-- for more info!!\n",cmd_args->argv[2]);
                     return 1;
@@ -283,9 +317,9 @@ int shellParseLine(struct hostArgs *cmd_args, formatCommand *format_command)
                 }
                 strcat(cwd,"/");
                 strcat(cwd,cmd_args->argv[2]);
-                strcpy(format_command->file_path,cwd);
+                strcpy(format_command->input_file_path,cwd);
 
-                if(!( access(format_command->file_path, F_OK ) != -1))
+                if(!( access(format_command->input_file_path, F_OK ) != -1))
                 {
                     // file doesn't exist
                     printf("File does not exist :: %s :: Type --help-- for more info!!\n",cmd_args->argv[2]);
@@ -503,8 +537,8 @@ static void initMessage(struct xrpm_message *msg)
     msg->head.type = XRPM_MessageTypeRequest;
     msg->head.majorVersion = XRPM_VERSION_MAJOR;
     msg->head.minorVersion = XRPM_VERSION_MINOR;
-    msg->param[0] = 0;
-    msg->param[2] = 0;
+    msg->param[PARAM_INDEX_IN_BUF_OFFSET] = 0;
+    msg->param[PARAM_INDEX_IN_EOF] = 0;
 }
 
 /*
@@ -538,14 +572,14 @@ void shellGain(struct xrpm_message *msg)
     /* Param 7 Gain control index, default is 4, range is 0 to 6 -> {0db, -6db, -12db, -18db, 6db, 12db, 18db}*/
     /* Param 8 return parameter, actual read bytes*/
     /* Param 9 return parameter, actual written bytes*/
-    msg->param[0] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
-    msg->param[1] = input_size;
-    msg->param[2] = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
-    msg->param[3] = AUDIO_MAX_OUTPUT_BUFFER;
-    msg->param[4]  = 44100; //sample reate
-    msg->param[5]  = 2;
-    msg->param[6]  = 16;
-    msg->param[7]  = GAIN_CTRL_IDX; // default 0
+    msg->param[PARAM_INDEX_IN_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
+    msg->param[PARAM_INDEX_IN_BUF_SIZE] = input_size;
+    msg->param[PARAM_INDEX_OUT_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+    msg->param[PARAM_INDEX_OUT_BUF_SIZE] = AUDIO_MAX_OUTPUT_BUFFER;
+    msg->param[PARAM_INDEX_COMP_SAMPLE_RATE]  = 44100; //sample reate
+    msg->param[PARAM_INDEX_COMP_CHANNELS]  = 2;
+    msg->param[PARAM_INDEX_COMP_PCM_WIDTH]  = 16;
+    msg->param[PARAM_INDEX_COMP_PCM_GAIN_INDEX]  = GAIN_CTRL_IDX; // default 0
     memcpy(msg->s_audioInput, XRPM_INPBUFFER_PCMGAIN, input_size);
 }
 
@@ -561,10 +595,12 @@ void shellStop(struct xrpm_message *msg)
     msg->head.command  = XRPM_Command_STOP;
 }
 
-void shellFileStart(struct xrpm_message *msg,formatCommand format_command)
+void shellFileStart(struct xrpm_message *msg,formatCommand *pformat_command)
 {
-    if (!file_playing) {
+    if (!file_playing[msg->head.cid])
+    {
         size_t bytes_read;
+        int cid = msg->head.cid;
         
 #ifdef DEBUG_LOG        
         printf("\n[Host] getFileStartParams\n");
@@ -575,47 +611,74 @@ void shellFileStart(struct xrpm_message *msg,formatCommand format_command)
         /* Param 1 Encoded input buffer size*/
         /* Param 2 EOF (true/false) */
         /* Param 3 Audio codec component type */
-        msg->param[0] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
-        msg->param[1] = FILE_PLAYBACK_INITIAL_READ_SIZE;
-        if(format_command.file_type == DSP_COMPONENT_MP3)
+        msg->param[PARAM_INDEX_IN_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
+        msg->param[PARAM_INDEX_IN_BUF_SIZE] = FILE_PLAYBACK_INITIAL_READ_SIZE;
+        //param[PARAM_INDEX_IN_EOF] = EOF; //if short file
+        msg->param[PARAM_INDEX_OUT_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+        msg->param[PARAM_INDEX_OUT_BUF_SIZE] = AUDIO_MAX_OUTPUT_BUFFER;
+
+        if(pformat_command->file_type == DSP_COMPONENT_MP3)
         {
-            msg->param[3] = DSP_COMPONENT_MP3;
+            msg->param[PARAM_INDEX_COMP_NAME] = DSP_COMPONENT_MP3;
         }
-        else if(format_command.file_type == DSP_COMPONENT_AAC)
+        else if(pformat_command->file_type == DSP_COMPONENT_AAC)
         {
-            msg->param[3] = DSP_COMPONENT_AAC;
+            msg->param[PARAM_INDEX_COMP_NAME] = DSP_COMPONENT_AAC;
         }
-        else if(format_command.file_type == DSP_COMPONENT_VORBIS)
+        else if(pformat_command->file_type == DSP_COMPONENT_VORBIS)
         {
-            msg->param[3] = DSP_COMPONENT_VORBIS;
+            msg->param[PARAM_INDEX_COMP_NAME] = DSP_COMPONENT_VORBIS;
+        }
+        else if(pformat_command->file_type == DSP_COMPONENT_PCM_GAIN)
+        {
+            msg->param[PARAM_INDEX_COMP_NAME] = DSP_COMPONENT_PCM_GAIN;
+        }
+        else if(pformat_command->file_type == DSP_COMPONENT_OPUS_ENC)
+        {
+            msg->param[PARAM_INDEX_COMP_NAME] = DSP_COMPONENT_OPUS_ENC;
+        }
+        else if(pformat_command->file_type == DSP_COMPONENT_OPUS_DEC)
+        {
+            msg->param[PARAM_INDEX_COMP_NAME] = DSP_COMPONENT_OPUS_DEC;
         }
         else
         {
-            msg->param[3] = -1; //Control should not come here.
+            msg->param[PARAM_INDEX_COMP_NAME] = -1; //Control should not come here.
                                 //If control visits this part then
                                 //there is a problem.
         }
-        /* File open in read mode*/
-        fp = fopen(format_command.file_path, "rb");
-        if ( fp == NULL )
-        {
-            printf("\n [Host-Error] : File open failed \n");
-            return;
-        }
-        /* Seek to the beginning of the file */
-        fseek(fp, 0, SEEK_SET);
 
-        bytes_read = fread(msg->s_audioInput, 1, FILE_PLAYBACK_INITIAL_READ_SIZE, fp);
+        /* Input File open in read mode*/
+        if(gfile_manager[cid].fpIn == NULL)
+        {
+            gfile_manager[cid].fpIn = fopen(pformat_command->input_file_path, "rb");
+            if ( gfile_manager[cid].fpIn == NULL )
+            {
+                printf("\n [Host-Error] : File open failed \n");
+                return;
+            }
+            /* Seek to the beginning of the file */
+            fseek(gfile_manager[cid].fpIn, 0, SEEK_SET);
+            gfile_manager_index++;
+        }
+
+        bytes_read = fread(msg->s_audioInput, 1, FILE_PLAYBACK_INITIAL_READ_SIZE, gfile_manager[cid].fpIn);
 #ifdef DEBUG_LOG           
         printf("[Host]bytes_read:%ld\r\n",bytes_read);
 #endif        
         /* Set EOF if file smaller than initial read block size */
         if (bytes_read < FILE_PLAYBACK_INITIAL_READ_SIZE)
         {
-            msg->param[2] = 1;
-            msg->param[1] = bytes_read;
+            msg->param[PARAM_INDEX_IN_EOF] = 1; //EOF
+            msg->param[PARAM_INDEX_IN_BUF_SIZE] = bytes_read;
+            //fclose(gfile_manager[cid].fpIn);
+            //gfile_manager_index--;
         }
-        file_playing = true;
+        else
+        {
+            msg->param[PARAM_INDEX_IN_EOF] = 0;
+        }
+        file_playing[msg->head.cid] = true;
     }
     else
     {
@@ -624,24 +687,229 @@ void shellFileStart(struct xrpm_message *msg,formatCommand format_command)
     }
 }
 
+void shellCompCreate(struct xrpm_message *msg,formatCommand *pformat_command)
+{
+    int input_size = sizeof(XRPM_INPBUFFER_PCMGAIN);
+    if ( input_size > AUDIO_MAX_INPUT_BUFFER)
+        input_size = AUDIO_MAX_INPUT_BUFFER;
+
+    char *pc = pformat_command->arg1;
+    char c[USERINPUT_MAX_SIZE];
+    int ival=0, i, cid=0, len;
+    char cseparator=',';
+    char cterminator=';';
+    
+    if((strncmp(&pc[1], "connect,", 8) == 0)) //pc[1] due to quote at the start of string
+    {
+    msg->param[PARAM_INDEX_CONNECT_NCONNECTS] = 0; //number of connect commands
+    msg->head.category = XRPM_MessageCategory_AUDIO;
+    msg->head.command  = XRPM_Command_CompConnect;
+
+    len = (uint64_t)strchr(pc,cseparator) - (uint64_t)pc;
+    strncpy(c, pc, len); c[len]='\0';
+    pc = strchr(pc,cseparator)+1;/* ...get next item */
+    
+    i = 0;
+    memset(&msg->param[PARAM_INDEX_CONNECT_COMP_ID_SRC], 0, sizeof(msg->param[PARAM_INDEX_CONNECT_COMP_ID_SRC]*(XRPM_CMD_PARAMS_MAX-PARAM_INDEX_CONNECT_COMP_ID_SRC)));
+    do{
+        switch(i)
+        {
+            case 0 ... PARAM_INDEX_CONNECT_NCONNECTS:
+                //index 8, read_bytes; index 9 written bytes. Will check later if that can be changed
+            break;
+            default:
+                if(strchr(pc,cseparator))
+                {
+                    len = (uint64_t)strchr(pc,cseparator) - (uint64_t)pc;
+                    strncpy(c, pc, len); c[len]='\0';
+                    pc = strchr(pc,cseparator)+1;/* ...get next item */
+                }
+                else if(strchr(pc,cterminator))
+                {
+                    len = (uint64_t)strchr(pc,cterminator) - (uint64_t)pc;
+                    strncpy(c, pc, len); c[len]='\0';
+                    pc = strchr(pc,cterminator)+1;/* ...get next item */
+                    msg->param[PARAM_INDEX_CONNECT_NCONNECTS]++;
+                }
+                else if(strchr(pc,'"'))
+                {
+                    i=XRPM_CMD_PARAMS_MAX; /* .. to break from while loop */
+                }
+
+                ival = atoi(c); 
+                msg->param[i] = ival;
+                if(strchr(c,cterminator))
+                {
+                    /* for last value in connect "1;," */
+                    msg->param[PARAM_INDEX_CONNECT_NCONNECTS]++;
+                }
+            break;
+        }
+        i++;
+    }while(strlen(pc) && (i < XRPM_CMD_PARAMS_MAX));
+    return;
+    }//if(connect)
+
+    if(strlen(pc)<7)
+    {
+        msg->head.category = XRPM_MessageCategory_AUDIO;
+        msg->head.command = XRPM_Command_FileStart;
+        for(i=0;i<DSP_NUM_COMP_IN_GRAPH_MAX;i++)
+        {
+            if(gfile_manager[i].fpIn)
+            {
+                msg->head.cid = gfile_manager[i].cid;
+                /* ... get the 1st input file, start reading */
+                break;
+            }
+        }
+        //TODO: all the connect data goes here at once
+        msg->param[PARAM_INDEX_IN_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
+        msg->param[PARAM_INDEX_IN_BUF_SIZE] = FILE_PLAYBACK_INITIAL_READ_SIZE;
+        msg->param[PARAM_INDEX_OUT_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+        msg->param[PARAM_INDEX_OUT_BUF_SIZE] = AUDIO_MAX_OUTPUT_BUFFER;
+        long int bytes_read = fread(msg->s_audioInput, 1, FILE_PLAYBACK_INITIAL_READ_SIZE, gfile_manager[msg->head.cid].fpIn);
+        /* Set EOF if file smaller than initial read block size */
+        if (bytes_read < FILE_PLAYBACK_INITIAL_READ_SIZE)
+        {
+            msg->param[PARAM_INDEX_IN_EOF] = 1; //EOF; if short file
+            msg->param[PARAM_INDEX_IN_BUF_SIZE] = bytes_read;
+        }
+        else
+        {
+            msg->param[PARAM_INDEX_IN_EOF] = 0;
+        }
+        file_playing[msg->head.cid] = true;
+        return;
+    }
+
+    /*
+    msg->param[PARAM_INDEX_IN_BUF_OFFSET]  = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
+    msg->param[PARAM_INDEX_IN_BUF_SIZE]  = input_size;
+    msg->param[PARAM_INDEX_OUT_BUF_OFFSET]  = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+    msg->param[PARAM_INDEX_OUT_BUF_SIZE]  = AUDIO_MAX_OUTPUT_BUFFER;
+    msg->param[PARAM_INDEX_COMP_SAMPLE_RATE]  = 44100; //sample reate
+    msg->param[PARAM_INDEX_COMP_CHANNELS]  = 2;
+    msg->param[PARAM_INDEX_COMP_PCM_WIDTH]  = 16;
+    msg->param[PARAM_INDEX_COMP_ID]  = cid;
+    msg->param[PARAM_INDEX_IN_BYTES_CONSUMED]  = 0; //bytesConsumed
+    msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED]  = 0; //bytesProduced
+    msg->param[PARAM_INDEX_COMP_NAME] = comp_name_enum;
+    msg->param[PARAM_INDEX_COMP_NUM_INBUF] = ninbufs;
+    msg->param[PARAM_INDEX_COMP_NUM_OUTBUF] = noutbufs;
+    msg->param[PARAM_INDEX_COMP_IN_FILE_ID] = fidIn;
+    msg->param[PARAM_INDEX_COMP_OUT_FILE_ID] = fidOut;
+    */
+
+    if((strncmp(&pc[1], "create,", 7) == 0)) //pc[1] due to quote at the start of string
+    {
+    msg->head.category = XRPM_MessageCategory_AUDIO;
+    msg->head.command  = XRPM_Command_CompCreate;
+
+    len = (uint64_t)strchr(pc,cseparator) - (uint64_t)pc;
+    strncpy(c, pc, len); c[len]='\0';
+    pc = strchr(pc,cseparator)+1;/* ...get next item */
+    msg->head.cid = 0; /* ..cid=0 while creating components */
+    
+    i=0;    
+    do{
+        switch(i)
+        {
+            case PARAM_INDEX_IN_BUF_OFFSET ... PARAM_INDEX_OUT_BUF_SIZE:
+            case PARAM_INDEX_IN_BYTES_CONSUMED ... PARAM_INDEX_OUT_BYTES_PRODUCED:
+                //index 8, read_bytes; index 9 written bytes. Will check later if that can be changed
+            break;
+            case PARAM_INDEX_COMP_ID:
+            case PARAM_INDEX_COMP_SAMPLE_RATE ... PARAM_INDEX_COMP_PCM_WIDTH:
+            case PARAM_INDEX_COMP_NAME ... PARAM_INDEX_COMP_NUM_OUTBUF:
+                len = (uint64_t)strchr(pc,cseparator) - (uint64_t)pc;
+                strncpy(c, pc, len); c[len]='\0';
+                ival = atoi(c); 
+                msg->param[i] = ival;
+                pc = strchr(pc,cseparator)+1;/* ...get next item */
+                if(i==PARAM_INDEX_COMP_ID) cid = ival;
+            break;
+            case PARAM_INDEX_COMP_IN_FILE_ID:
+                len = (uint64_t)strchr(pc,cseparator) - (uint64_t)pc;
+                strncpy(c, pc, len); c[len]='\0';
+                if(len)
+                {
+                    FILE *fp;
+                    strcpy(pformat_command->input_file_path, c);
+                    fp = fopen(pformat_command->input_file_path, "rb");
+                    if ( fp == NULL )
+                    {
+                        printf("\n [Host-Error] : File open failed %s\n", pformat_command->input_file_path);
+                        return;
+                    }
+                    /* Seek to the beginning of the file */
+                    fseek(fp, 0, SEEK_SET);
+
+                    gfile_manager[cid].fid = gfile_manager_index;
+                    gfile_manager[cid].cid = cid;
+                    gfile_manager[cid].fpIn = fp;
+                    msg->param[i] = gfile_manager_index;
+                    msg->param[PARAM_INDEX_IN_BUF_OFFSET]  = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
+                    msg->param[PARAM_INDEX_IN_BUF_SIZE]  = input_size;
+                    gfile_manager_index++;
+                }
+                pc = strchr(pc,cseparator)+1;/* ...get next item */
+            break;
+            case PARAM_INDEX_COMP_OUT_FILE_ID:
+                len = (uint64_t)strchr(pc,cterminator) - (uint64_t)pc;
+                strncpy(c, pc, len); c[len]='\0';
+                if(len)
+                {
+                    FILE *fp;
+                    strcpy(pformat_command->output_file_path, c);
+                    fp = fopen(pformat_command->output_file_path, "wb");
+                    if ( fp == NULL )
+                    {
+                        printf("\n [Host-Error] : File open failed %s\n", pformat_command->output_file_path);
+                        return;
+                    }
+
+                    gfile_manager[cid].fid = gfile_manager_index;
+                    gfile_manager[cid].cid = cid;
+                    gfile_manager[cid].fpOut = fp;
+                    msg->param[i] = gfile_manager_index;
+                    msg->param[PARAM_INDEX_OUT_BUF_OFFSET]  = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+                    msg->param[PARAM_INDEX_OUT_BUF_SIZE]  = AUDIO_MAX_OUTPUT_BUFFER;
+                    gfile_manager_index++;
+
+                    i = XRPM_CMD_PARAMS_MAX; /* ... to break from the while loop after one set of create command */
+                }
+                pc = strchr(pc,cterminator)+1;/* ...get next item */
+            break;
+            default:
+            break;
+        }
+        i++;
+    }while((pc != NULL) && (i < XRPM_CMD_PARAMS_MAX));
+
+    //shift out the processed create set; keep the starting double quote, else strncmpr doesnt work ok
+    strcpy(&pformat_command->arg1[1], pc);
+    }//if(create)
+}
+
 void shellFileData(struct xrpm_message *msg,int stop_flag)
 {
-    if (file_playing)
+    if(file_playing[msg->head.cid] && (gfile_manager[msg->head.cid].fpIn))
     {
         size_t bytes_read;
 #ifdef DEBUG_LOG         
         printf("\n[Host]getFileDataParams\n");
 #endif        
         msg->head.category = XRPM_MessageCategory_AUDIO;
-        msg->head.command = XRPM_Command_FileData;
+        msg->head.command = XRPM_Command_FileDataIn;
         /* Param 0 Encoded input buffer offset*/
         /* Param 1 Encoded input buffer size*/
         /* Param 2 EOF (true/false) */
         /* Param 3 Audio codec component type */
-        msg->param[0] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
-        msg->param[1] = FILE_PLAYBACK_INITIAL_READ_SIZE;
-        msg->param[2] = 0;
-        bytes_read = fread(msg->s_audioInput, 1, FILE_PLAYBACK_INITIAL_READ_SIZE, fp);
+        msg->param[PARAM_INDEX_IN_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioInput[0])-(uintptr_t)(msg));
+        msg->param[PARAM_INDEX_IN_BUF_SIZE] = FILE_PLAYBACK_INITIAL_READ_SIZE;
+        msg->param[PARAM_INDEX_IN_EOF] = 0;
+        bytes_read = fread(msg->s_audioInput, 1, FILE_PLAYBACK_INITIAL_READ_SIZE, gfile_manager[msg->head.cid].fpIn);
 #ifdef DEBUG_LOG                     
         printf("[Host]bytes_read:%ld\r\n",bytes_read);
 #endif        
@@ -651,14 +919,17 @@ void shellFileData(struct xrpm_message *msg,int stop_flag)
             printf("[Host]File read End\r\n");
 #endif            
             /* Set EOF param if final segment of file is sent. */
-            msg->param[2] = 1;
+            msg->param[PARAM_INDEX_IN_EOF] = 1;
             if(stop_flag == HOST_CMD_STOP)
             {
                 bytes_read = 0;
             }
-           // *notify_shell = false;
         }
-        msg->param[1] = bytes_read;
+        else
+        {
+            msg->param[PARAM_INDEX_IN_EOF] = 0;
+        }
+        msg->param[PARAM_INDEX_IN_BUF_SIZE] = bytes_read;
 
     }
     else
@@ -672,9 +943,9 @@ void shellFileData(struct xrpm_message *msg,int stop_flag)
 /*
  * Set Headers and params for specific codec.
  */
-void handleShellCommand(struct xrpm_message *msg,formatCommand format_command)
+void handleShellCommand(struct xrpm_message *msg,formatCommand *pformat_command)
 {
-    switch(format_command.cmd)
+    switch(pformat_command->cmd)
     {
         case HOST_CMD_GAIN:
         {
@@ -696,9 +967,32 @@ void handleShellCommand(struct xrpm_message *msg,formatCommand format_command)
             shellStop(msg);
             break;
         }
+        case HOST_CMD_CREATE:
+        {
+            shellCompCreate(msg, pformat_command);
+            break;
+        }
         case HOST_CMD_FILE:
         {
-            shellFileStart(msg,format_command);
+#if 1
+            int len=0;
+            char file_type[2]; 
+            file_type[0] = '0'+ (char)pformat_command->file_type;
+            file_type[1] = '\0';
+
+            strcpy(&pformat_command->arg1[len], "\"create,44100,1,16,0,");
+            len = strlen(pformat_command->arg1);
+            strcpy(&pformat_command->arg1[len], file_type);
+            len = strlen(pformat_command->arg1);
+            strcpy(&pformat_command->arg1[len], ",2,1,");
+            len = strlen(pformat_command->arg1);
+            strcpy(&pformat_command->arg1[len], pformat_command->input_file_path);
+            len = strlen(pformat_command->arg1);
+            strcpy(&pformat_command->arg1[len], ",../test/test_out/out_xaf.pcm;\"");
+            shellCompCreate(msg, pformat_command);
+#else
+            shellFileStart(msg, pformat_command);
+#endif
             break;
         }
         case HOST_CMD_HELP:
@@ -706,7 +1000,7 @@ void handleShellCommand(struct xrpm_message *msg,formatCommand format_command)
         case HOST_CMD_LIST:
             break;
         default:
-            printf("HOST :: Command not supported::%d",format_command.cmd);
+            printf("HOST :: Command not supported::%d", pformat_command->cmd);
     }
 }
 
@@ -749,7 +1043,7 @@ int host_dsp_start(int devid,formatCommand format_command)
 
     initMessage(msg);
 
-    handleShellCommand(msg,format_command);
+    handleShellCommand(msg, &format_command);
 
     xrp_unmap_buffer(buf, msg, &status);
     assert(status == XRP_STATUS_SUCCESS);
@@ -757,17 +1051,19 @@ int host_dsp_start(int devid,formatCommand format_command)
 
     xrp_add_buffer_to_group(group, buf, XRP_READ_WRITE, &status);
     assert(status == XRP_STATUS_SUCCESS);
-    status = -1;
-    cmd = sizeof(struct xrpm_message);
-    xrp_run_command_sync(queue, &cmd, sizeof(cmd), NULL, 0, group, &status);
-    assert(status == XRP_STATUS_SUCCESS);
-
-    status = -1;
-    msg = (struct xrpm_message*)xrp_map_buffer(buf, 0, sizeof(struct xrpm_message), XRP_READ_WRITE, &status);
-    assert(status == XRP_STATUS_SUCCESS);
 
     do
     {
+        status = -1;
+        cmd = sizeof(struct xrpm_message);
+        xrp_run_command_sync(queue, &cmd, sizeof(cmd), NULL, 0, group, &status);
+        assert(status == XRP_STATUS_SUCCESS);
+
+        status = -1;
+        msg = (struct xrpm_message*)xrp_map_buffer(buf, 0, sizeof(struct xrpm_message), XRP_READ_WRITE, &status);
+        assert(status == XRP_STATUS_SUCCESS);
+        status = -1;
+
         /* Process return data from DSP*/
         switch (msg->head.category)
         {
@@ -822,16 +1118,58 @@ int host_dsp_start(int devid,formatCommand format_command)
                         if (msg->error != XRPM_Status_Success)
                         {
                             printf("DSP file playback start failed! return error = %d\r\n", msg->error);
-                            file_playing = false;
+                            file_playing[msg->head.cid] = false;
                         }
                         else
                         {
                             printf("[Host]DSP file playback start\r\n");
                         }
+                        shellFileStart(msg, &format_command);
 
+                        xrp_unmap_buffer(buf, msg, &status);
+                        assert(status == XRP_STATUS_SUCCESS);
+                        continue;
                         break;
 
-                    case XRPM_Command_FileData:
+                    case XRPM_Command_CompConnect:
+                    {
+                        if (msg->error != XRPM_Status_Success)
+                        {
+                            printf("DSP comp connect info copy failed! return error = %d\r\n", msg->error);
+                        }
+                        else
+                        {
+                            printf("[Host]DSP comp connect info copied\r\n");
+                        }
+
+                        xrp_unmap_buffer(buf, msg, &status);
+                        assert(status == XRP_STATUS_SUCCESS);
+
+                        continue;
+                        break;
+                    }
+
+                    case XRPM_Command_CompCreate:
+                    {
+                        if (msg->error != XRPM_Status_Success)
+                        {
+                            printf("DSP comp create failed! return error = %d\r\n", msg->error);
+                            file_playing[msg->head.cid] = false;
+                        }
+                        else
+                        {
+                            printf("[Host]DSP comp created cid:%d\r\n", msg->param[PARAM_INDEX_COMP_ID]);
+                        }
+
+                        shellCompCreate(msg, &format_command);
+
+                        xrp_unmap_buffer(buf, msg, &status);
+                        assert(status == XRP_STATUS_SUCCESS);
+                        continue;
+                        break;
+                    }
+
+                    case XRPM_Command_FileDataIn:
                     {
                         int result = 0;
 
@@ -875,40 +1213,93 @@ int host_dsp_start(int devid,formatCommand format_command)
                         }
                         xrp_unmap_buffer(buf, msg, &status);
                         assert(status == XRP_STATUS_SUCCESS);
-                        status = -1;
+                        continue;
 
-                        cmd = sizeof(struct xrpm_message);
-                        xrp_run_command_sync(queue, &cmd, sizeof(cmd), NULL, 0, group, &status);
-                        assert(status == XRP_STATUS_SUCCESS);
+                        break;
+                    }
 
-                        status = -1;
-                        msg = (struct xrpm_message*)xrp_map_buffer(buf, 0, sizeof(struct xrpm_message), XRP_READ_WRITE, &status);
-                        assert(status == XRP_STATUS_SUCCESS);
-                        if(msg->head.command == XRPM_Command_FileEnd)
+                    case XRPM_Command_FileDataOut:
+                    {
+                        if(gfile_manager[msg->head.cid].fpOut)
                         {
-                            printf("\nDSP file playback complete\r\n\n>>");
-                            fflush(stdout);
-                            file_playing = false;
-                            result = fclose(fp);
-                            if (result)
+                            fwrite(msg->s_audioOutput, msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED], 1, gfile_manager[msg->head.cid].fpOut);
+                            if(msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED] < AUDIO_MAX_OUTPUT_BUFFER)
                             {
-                                printf("Failed to close file\r\n");
+                                ((fclose(gfile_manager[msg->head.cid].fpOut))? printf("Failed to close Outfile @ %d\r\n",__LINE__):0);
+                                gfile_manager[msg->head.cid].fpOut = NULL;
+                                gfile_manager_index--;
+                                printf("#%s:%d:%s cid:%d outBytes:%d\n", __FILE__,__LINE__,__func__, msg->head.cid, msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED]);
                             }
+                            msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED]=0;
+                        }
+                        xrp_unmap_buffer(buf, msg, &status);
+                        assert(status == XRP_STATUS_SUCCESS);
+
+                        continue;
+                    }
+                    case XRPM_Command_FileEndOut:
+                    {
+                        if(gfile_manager[msg->head.cid].fpOut)
+                        {
+                            fwrite(msg->s_audioOutput, msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED], 1, gfile_manager[msg->head.cid].fpOut);
+                            if(msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED] < AUDIO_MAX_OUTPUT_BUFFER)
+                            {
+                                ((fclose(gfile_manager[msg->head.cid].fpOut))? printf("Failed to close Outfile @ %d\r\n",__LINE__):0);
+                                gfile_manager[msg->head.cid].fpOut = NULL;
+                                gfile_manager_index--;
+                                //printf("#%s:%d:%s cid:%d outBytes:%d\n", __FILE__,__LINE__,__func__, msg->head.cid, msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED]);
+                            }
+
+                            msg->head.category = XRPM_MessageCategory_AUDIO;
+                            msg->head.command = XRPM_Command_FileDataOut;
+                            /* Param 0 Encoded input buffer offset*/
+                            /* Param 1 Encoded input buffer size*/
+                            /* Param 2 EOF (true/false) */
+                            /* Param 3 Audio codec component type */
+                            msg->param[PARAM_INDEX_OUT_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+                            msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED] = 0;
+                        }
+
+                        /* ...wait for other files to close */
+                        if(gfile_manager_index)
+                        {
+                            xrp_unmap_buffer(buf, msg, &status);
+                            assert(status == XRP_STATUS_SUCCESS);
                         }
                         break;
                     }
                     case XRPM_Command_FileEnd:
                     {
-                        int result;
-                        printf("DSP file playback complete\r\n\n>>");
-                        fflush(stdout);
-                        file_playing = false;
-                        result = fclose(fp);
-                        if (result)
+                        if(gfile_manager[msg->head.cid].fpIn)
                         {
-                            printf("Failed to close file\r\n");
+                            int result;
+                            printf("\nDSP file playback complete cid:%d@%d\r\n\n>>", msg->head.cid, __LINE__); fflush(stdout);
+                            file_playing[msg->head.cid] = false;
+                            result = fclose(gfile_manager[msg->head.cid].fpIn);
+                            gfile_manager[msg->head.cid].fpIn = NULL;
+                            gfile_manager_index--;
+                            if (result)
+                            {
+                                printf("Failed to close file\r\n");
+                            }
+                            printf("\n File end and exit flag is SET!! cid[%d]@%d\n", msg->head.cid, __LINE__);
+
+                            msg->head.category = XRPM_MessageCategory_AUDIO;
+                            msg->head.command = XRPM_Command_FileDataOut;
+                            /* Param 0 Encoded input buffer offset*/
+                            /* Param 1 Encoded input buffer size*/
+                            /* Param 2 EOF (true/false) */
+                            /* Param 3 Audio codec component type */
+                            msg->param[PARAM_INDEX_OUT_BUF_OFFSET] = (unsigned int)( (uintptr_t)(&msg->s_audioOutput[0])-(uintptr_t)(msg));
+                            msg->param[PARAM_INDEX_OUT_BYTES_PRODUCED] = 0;
                         }
-                        printf("\n\n File end and exit flag is SET!! \n\n");
+
+                        /* ...wait for other files to close */
+                        if(gfile_manager_index)
+                        {
+                            xrp_unmap_buffer(buf, msg, &status);
+                            assert(status == XRP_STATUS_SUCCESS);
+                        }
                         break;
                     }
                     default:
@@ -919,8 +1310,8 @@ int host_dsp_start(int devid,formatCommand format_command)
             default:
                 printf("Incoming unknown message command %d from category %d \r\n", msg->head.command,
                 msg->head.category);
-        }
-    }while((msg->head.command == XRPM_Command_FileData));
+        }//switch (msg->head.category)
+    }while( (msg->head.command == XRPM_Command_FileDataIn) || (msg->head.command == XRPM_Command_CompCreate) || gfile_manager_index);
     xrp_release_buffer_group(group);
     xrp_release_buffer(buf);
     xrp_release_queue(queue);
@@ -960,6 +1351,9 @@ int main(int argc, char **argv)
         printf("Pipe creation Failed\n" );
         return 0; //Error, quit
     }
+
+    memset(&file_playing, 0, sizeof(file_playing));
+    memset(gfile_manager, 0, sizeof(gfile_manager));
 
     pthread_create(&thread_id[0], NULL, shell_thread, &cmd_args);
     pthread_create(&thread_id[1], NULL, hostdsp_thread, NULL);

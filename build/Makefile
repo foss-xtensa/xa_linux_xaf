@@ -20,10 +20,11 @@ endif
 
 DSP_DIR = ../dsp
 HOST_DIR = ../host/src
-XA_FRMWK_HW_REL_DIR = ../dsp/xaf/build
+XA_FRMWK_HW_REL_DIR = ../dsp/xaf-hostless/build
 SYSBUILD_DIR = sysbuild_dir
 SUBSYS_YML = subsys.yml
 SUBSYS_XLD = subsys.xld
+CMAKE=cmake
 
 LSP0=${SYSBUILD_DIR}/sys-x86_64-linux/subsys.xld/package/cores/DSP0/xtensa-elf/lib/sim
 
@@ -56,7 +57,17 @@ DSP0_LDFLAGS = -lxrp-dsp -lxrp-dsp-hw-simple-xos -lxrp-common \
 
 DSP_CFLAGS = -I $(INCLUDE) -O2 -Wall -Werror
 
-all: stmp-xrp $(HOST_BIN) $(DSP0_BIN)
+clean_host:
+	rm -rf $(HOST_BIN)
+
+clean_dsp:
+	rm -rf $(DSP0_BIN)
+	make -f makefile_test_dsp clean
+
+all: clean_host clean_dsp stmp-xrp $(HOST_BIN) $(DSP0_BIN)
+
+test_dsp: 
+	make -f makefile_test_dsp all
 
 # Copy over the XRP host sources
 xrp_setup: 
@@ -71,7 +82,7 @@ stmp-xrp:
 	mkdir -p build install
 	cd build && \
 	  CC=gcc CXX=g++  \
-		cmake ..  \
+		$(CMAKE) ..  \
       -DCMAKE_INSTALL_PREFIX=../install && \
   make VERBOSE=1 install && \
   cd ..
@@ -89,10 +100,13 @@ $(HOST_BIN): $(HOST_DIR)/host_main.c
 
 LIBS := -Wl,--start-group \
         $(XA_FRMWK_HW_REL_DIR)/xa_af_hostless.a \
+        $(XA_FRMWK_HW_REL_DIR)/../test/plugins/cadence/mp3_dec/lib/xa_mp3_dec.a \
         $(XA_FRMWK_HW_REL_DIR)/../test/plugins/cadence/vorbis_dec/lib/xa_vorbis_dec.a \
+        $(XA_FRMWK_HW_REL_DIR)/../test/plugins/cadence/opus_enc/lib/xa_opus_codec.a \
+        xa_test_dsp.a \
         -Wl,--end-group 
     
-$(DSP0_BIN): $(DSP_DIR)/dsp_main.c 
+$(DSP0_BIN): $(DSP_DIR)/src/dsp_main.c test_dsp
 	$(DSP_CC) --xtensa-core=${XTENSA_CORE} $(DSP_CFLAGS) $< $(DSP0_LDFLAGS)  $(LIBS) -lxos -o $@
 
 define run_pre
