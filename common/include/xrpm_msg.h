@@ -1,25 +1,3 @@
-/*
-* Copyright (c) 2015-2020 Cadence Design Systems Inc.
-*
-* Permission is hereby granted, free of charge, to any person obtaining
-* a copy of this software and associated documentation files (the
-* "Software"), to deal in the Software without restriction, including
-* without limitation the rights to use, copy, modify, merge, publish,
-* distribute, sublicense, and/or sell copies of the Software, and to
-* permit persons to whom the Software is furnished to do so, subject to
-* the following conditions:
-*
-* The above copyright notice and this permission notice shall be included
-* in all copies or substantial portions of the Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*/
 
 #ifndef _XRPM_MSG_H
 #define _XRPM_MSG_H
@@ -84,6 +62,7 @@ typedef struct _xrpm_packet_head
     char command;
     char priority;
     char reserved[4U];
+    int cid;
 } xrpm_packet_head_t;
 
 #define AUDIO_MAX_INPUT_BUFFER  (113 * 1024)
@@ -117,7 +96,9 @@ typedef enum _xrpm_audio_component
     DSP_COMPONENT_MP3,
     DSP_COMPONENT_AAC,
     DSP_COMPONENT_VORBIS,
-    DSP_COMPONENT_OPUS
+    DSP_COMPONENT_PCM_GAIN,
+    DSP_COMPONENT_OPUS_ENC,
+    DSP_COMPONENT_OPUS_DEC,
 } xrpm_audio_component_t;
 
 /**
@@ -128,12 +109,45 @@ typedef enum _xrpm_dsp_audio_command
     XRPM_Command_ECHO,      /* Fetch XAF version */
     XRPM_Command_GAIN,      /* PCM Gain control */
     XRPM_Command_FileStart, /* File playback start */
-	XRPM_Command_FileData,  /* Data frame from remote file playback */
+	XRPM_Command_FileDataIn,  /* Data frame from remote file playback */
 	XRPM_Command_FileStop,
 	XRPM_Command_FileEnd,
+	XRPM_Command_FileEndOut,
 	XRPM_Command_EXIT,	
-	XRPM_Command_STOP	
+	XRPM_Command_STOP,
+	XRPM_Command_FileDataOut,  /* Data frame from remote playback DSP output */
+	XRPM_Command_CompCreate,
+	XRPM_Command_CompConnect,
 } xrpm_audio_command_t;
+
+enum _param_index {
+    PARAM_INDEX_IN_BUF_OFFSET =0,
+    PARAM_INDEX_IN_BUF_SIZE =1,
+    PARAM_INDEX_IN_EOF =2,  /* intentional repeat enum */
+    PARAM_INDEX_OUT_BUF_OFFSET =3,
+    PARAM_INDEX_OUT_BUF_SIZE =4,
+    PARAM_INDEX_COMP_SAMPLE_RATE =5,
+    PARAM_INDEX_COMP_CHANNELS =6,
+    PARAM_INDEX_COMP_PCM_WIDTH =7,
+    PARAM_INDEX_COMP_PCM_GAIN_INDEX =8,
+    PARAM_INDEX_COMP_ID =9,
+    PARAM_INDEX_IN_BYTES_CONSUMED =10,
+    PARAM_INDEX_OUT_BYTES_PRODUCED =11,
+    PARAM_INDEX_COMP_NAME =12,
+    PARAM_INDEX_COMP_NUM_INBUF =13,
+    PARAM_INDEX_COMP_NUM_OUTBUF =14,
+    PARAM_INDEX_COMP_IN_FILE_ID =15,
+    PARAM_INDEX_COMP_OUT_FILE_ID =16,
+    PARAM_INDEX_MAX,
+};
+
+enum _param_connect_index {
+    PARAM_INDEX_CONNECT_NCONNECTS   =12,
+    PARAM_INDEX_CONNECT_COMP_ID_SRC =13,
+    PARAM_INDEX_CONNECT_PORT_ID_SRC =14,
+    PARAM_INDEX_CONNECT_COMP_ID_DST =15,
+    PARAM_INDEX_CONNECT_PORT_ID_DST =16,
+};
 
 #endif
 
